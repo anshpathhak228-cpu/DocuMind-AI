@@ -1,3 +1,3 @@
-import type { NextConfig } from "next";
-const nextConfig: NextConfig = { poweredByHeader:false };
+import type {NextConfig} from "next";
+const nextConfig:NextConfig={};
 export default nextConfig;
