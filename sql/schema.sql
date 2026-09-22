@@ -1,0 +1,10 @@
+create extension if not exists vector;
+create table if not exists public.documents(id uuid primary key default gen_random_uuid(),user_id uuid not null references auth.users(id) on delete cascade,file_name text not null,file_type text not null,file_size bigint not null default 0,storage_path text not null,extracted_text text,summary text,is_favorite boolean not null default false,created_at timestamptz not null default now(),updated_at timestamptz not null default now());
+create table if not exists public.folders(id uuid primary key default gen_random_uuid(),user_id uuid not null references auth.users(id) on delete cascade,name text not null,created_at timestamptz not null default now());
+alter table public.documents enable row level security; alter table public.folders enable row level security;
+create policy "documents owner" on public.documents for all using(auth.uid()=user_id) with check(auth.uid()=user_id);
+create policy "folders owner" on public.folders for all using(auth.uid()=user_id) with check(auth.uid()=user_id);
+insert into storage.buckets(id,name,public) values('documents','documents',false) on conflict(id) do nothing;
+create policy "storage read own" on storage.objects for select using(bucket_id='documents' and (storage.foldername(name))[1]=auth.uid()::text);
+create policy "storage insert own" on storage.objects for insert with check(bucket_id='documents' and (storage.foldername(name))[1]=auth.uid()::text);
+create policy "storage delete own" on storage.objects for delete using(bucket_id='documents' and (storage.foldername(name))[1]=auth.uid()::text);
