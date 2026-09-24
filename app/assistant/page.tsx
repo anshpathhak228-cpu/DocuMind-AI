@@ -346,22 +346,108 @@ const r = await fetch(
   }
 );
 
-      const j = await r.json();
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
 
-      const answer = r.ok
-        ? j.answer
-        : j.error ||
-          "Something went wrong.";
+        throw new Error(
+          j.error ||
+            "Something went wrong."
+        );
+      }
 
+      if (!r.body) {
+        throw new Error(
+          "AI response stream is unavailable."
+        );
+      }
+
+      // Add an empty assistant message immediately.
+      // The answer will appear progressively as the AI streams it.
       setM((old) => [
         ...old,
         {
           role: "assistant",
-          content: answer,
+          content: "",
         },
       ]);
 
-      if (r.ok) {
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+
+      let buffer = "";
+      let answer = "";
+
+      while (true) {
+        const { value, done } =
+          await reader.read();
+
+        if (done) break;
+
+        buffer += decoder.decode(
+          value,
+          { stream: true }
+        );
+
+        const events =
+          buffer.split("\n\n");
+
+        buffer =
+          events.pop() || "";
+
+        for (const event of events) {
+          const lines =
+            event.split("\n");
+
+          for (const line of lines) {
+            if (!line.startsWith("data:")) {
+              continue;
+            }
+
+            const data =
+              line.slice(5).trim();
+
+            if (!data || data === "[DONE]") {
+              continue;
+            }
+
+            try {
+              const parsed =
+                JSON.parse(data);
+
+              const delta =
+                parsed?.choices?.[0]?.delta
+                  ?.content;
+
+              if (delta) {
+                answer += delta;
+
+                setM((old) => {
+                  const updated = [...old];
+                  const last =
+                    updated.length - 1;
+
+                  if (
+                    updated[last]?.role ===
+                    "assistant"
+                  ) {
+                    updated[last] = {
+                      ...updated[last],
+                      content: answer,
+                    };
+                  }
+
+                  return updated;
+                });
+              }
+            } catch {
+              // Ignore incomplete SSE JSON chunks.
+            }
+          }
+        }
+      }
+
+      // Save the complete answer after streaming finishes.
+      if (answer.trim()) {
         await saveMessage(
           activeSession,
           "assistant",
@@ -607,7 +693,11 @@ const r = await fetch(
                     </div>
                   ))}
 
-                  {busy && (
+                  {busy &&
+                    (!m.length ||
+                      m[m.length - 1]?.role !==
+                        "assistant" ||
+                      !m[m.length - 1]?.content) && (
                     <div className="msg ai">
                       Thinking...
                     </div>
