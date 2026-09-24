@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase";
 
 export default function Upload() {
   const router = useRouter();
@@ -12,27 +13,84 @@ export default function Upload() {
   const [busy, setBusy] = useState(false);
 
   async function up() {
-    if (!file) return;
+    if (!file || busy) return;
 
     setBusy(true);
-    setMsg("");
+    setMsg("Uploading securely...");
 
     try {
-      const fd = new FormData();
-      fd.append("file", file);
+      const supabase = createClient();
 
-      const r = await fetch("/api/upload", {
-        method: "POST",
-        body: fd,
-      });
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-      const j = await r.json();
-
-      if (!r.ok) {
-        throw new Error(j.error || "Upload failed");
+      if (userError || !user) {
+        throw new Error("Please login first.");
       }
 
-      setMsg("Upload complete! Opening dashboard...");
+      const safeName = file.name.replace(
+        /[^a-zA-Z0-9._-]/g,
+        "_"
+      );
+
+      const path =
+        user.id +
+        "/" +
+        crypto.randomUUID() +
+        "-" +
+        safeName;
+
+      const { error: uploadError } =
+        await supabase.storage
+          .from("documents")
+          .upload(path, file, {
+            contentType:
+              file.type ||
+              "application/octet-stream",
+            upsert: false,
+          });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      setMsg(
+        "File uploaded. Processing document..."
+      );
+
+      const response = await fetch(
+        "/api/upload",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            path,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+          }),
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        await supabase.storage
+          .from("documents")
+          .remove([path]);
+
+        throw new Error(
+          result.error || "Document processing failed."
+        );
+      }
+
+      setMsg(
+        "Upload complete! Opening dashboard..."
+      );
 
       setFile(null);
 
@@ -40,11 +98,11 @@ export default function Upload() {
         router.push("/dashboard");
         router.refresh();
       }, 700);
-    } catch (e) {
+    } catch (error) {
       setMsg(
-        e instanceof Error
-          ? e.message
-          : "Upload failed"
+        error instanceof Error
+          ? error.message
+          : "Upload failed."
       );
     } finally {
       setBusy(false);
@@ -66,9 +124,18 @@ export default function Upload() {
 
           <div className="links">
             <Link href="/">Home</Link>
-            <Link href="/dashboard">Dashboard</Link>
-            <Link href="/upload">Upload</Link>
-            <Link href="/assistant">AI Assistant</Link>
+
+            <Link href="/dashboard">
+              Dashboard
+            </Link>
+
+            <Link href="/upload">
+              Upload
+            </Link>
+
+            <Link href="/assistant">
+              AI Assistant
+            </Link>
           </div>
 
         </nav>
@@ -79,13 +146,15 @@ export default function Upload() {
 
           <p className="muted">
             Upload your documents securely.
-            Text will be extracted and prepared
-            for AI search and RAG.
+            DocAI will extract the text and
+            prepare it for AI search and RAG.
           </p>
 
           <div className="drop">
 
-            <h2>☁️ Choose a document</h2>
+            <h2>
+              ☁️ Choose a document
+            </h2>
 
             <input
               type="file"
@@ -98,7 +167,8 @@ export default function Upload() {
             />
 
             <p>
-              {file?.name ?? "No file selected"}
+              {file?.name ||
+                "No file selected"}
             </p>
 
             <button
