@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase";
 
 type Msg = {
   id?: string;
@@ -39,7 +40,10 @@ export default function Assistant() {
   async function loadSession(id: string) {
     setSessionId(id);
 
-    const r = await fetch(`/api/chat/sessions/${id}/messages`);
+    const r = await fetch(
+      `/api/chat/sessions/${id}/messages`
+    );
+
     const j = await r.json();
 
     if (r.ok) {
@@ -47,7 +51,7 @@ export default function Assistant() {
     }
   }
 
-  async function newChat() {
+  function newChat() {
     setSessionId("");
     setM([]);
     setQ("");
@@ -59,18 +63,22 @@ export default function Assistant() {
       headers: {
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        title,
-      }),
+      body: JSON.stringify({ title }),
     });
 
     const j = await r.json();
 
     if (!r.ok) {
-      throw new Error(j.error || "Failed to create chat.");
+      throw new Error(
+        j.error || "Failed to create chat."
+      );
     }
 
-    setSessions((old) => [j.session, ...old]);
+    setSessions((old) => [
+      j.session,
+      ...old,
+    ]);
+
     setSessionId(j.session.id);
 
     return j.session.id;
@@ -81,16 +89,19 @@ export default function Assistant() {
     role: "user" | "assistant",
     content: string
   ) {
-    await fetch(`/api/chat/sessions/${id}/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        role,
-        content,
-      }),
-    });
+    await fetch(
+      `/api/chat/sessions/${id}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          role,
+          content,
+        }),
+      }
+    );
   }
 
   async function send() {
@@ -105,17 +116,24 @@ export default function Assistant() {
       let activeSession = sessionId;
 
       if (!activeSession) {
-        activeSession = await createSession(text.slice(0, 40));
+        activeSession = await createSession(
+          text.slice(0, 40)
+        );
       }
 
-      const userMessage: Msg = {
-        role: "user",
-        content: text,
-      };
+      setM((old) => [
+        ...old,
+        {
+          role: "user",
+          content: text,
+        },
+      ]);
 
-      setM((old) => [...old, userMessage]);
-
-      await saveMessage(activeSession, "user", text);
+      await saveMessage(
+        activeSession,
+        "user",
+        text
+      );
 
       const r = await fetch("/api/chat", {
         method: "POST",
@@ -150,19 +168,25 @@ export default function Assistant() {
       }
 
       await loadSessions();
-    } catch (error: any) {
+    } catch (error) {
       setM((old) => [
         ...old,
         {
           role: "assistant",
           content:
-            error?.message ||
-            "Network error. Please try again.",
+            error instanceof Error
+              ? error.message
+              : "Network error. Please try again.",
         },
       ]);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function logout() {
+    await createClient().auth.signOut();
+    window.location.href = "/";
   }
 
   useEffect(() => {
@@ -174,6 +198,7 @@ export default function Assistant() {
       <div className="container">
 
         <nav className="nav">
+
           <Link
             className="brand"
             href="/dashboard"
@@ -182,6 +207,8 @@ export default function Assistant() {
           </Link>
 
           <div className="links">
+            <Link href="/">Home</Link>
+
             <Link href="/dashboard">
               Dashboard
             </Link>
@@ -189,7 +216,19 @@ export default function Assistant() {
             <Link href="/upload">
               Upload
             </Link>
+
+            <Link href="/assistant">
+              AI Assistant
+            </Link>
           </div>
+
+          <button
+            className="btn"
+            onClick={logout}
+          >
+            Logout
+          </button>
+
         </nav>
 
         <section className="main">
@@ -197,12 +236,11 @@ export default function Assistant() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "240px 1fr",
+              gridTemplateColumns:
+                "240px 1fr",
               gap: "20px",
             }}
           >
-
-            {/* CHAT HISTORY */}
 
             <aside
               className="card"
@@ -211,6 +249,7 @@ export default function Assistant() {
                 height: "fit-content",
               }}
             >
+
               <button
                 className="btn primary"
                 onClick={newChat}
@@ -239,7 +278,9 @@ export default function Assistant() {
               {sessions.map((s) => (
                 <button
                   key={s.id}
-                  onClick={() => loadSession(s.id)}
+                  onClick={() =>
+                    loadSession(s.id)
+                  }
                   style={{
                     display: "block",
                     width: "100%",
@@ -247,7 +288,8 @@ export default function Assistant() {
                     padding: "10px",
                     marginBottom: "6px",
                     borderRadius: "10px",
-                    border: "1px solid #24334d",
+                    border:
+                      "1px solid #24334d",
                     background:
                       sessionId === s.id
                         ? "#263b66"
@@ -259,15 +301,17 @@ export default function Assistant() {
                   {s.title}
                 </button>
               ))}
+
             </aside>
 
-            {/* ASSISTANT */}
-
             <div>
+
               <h1>AI Assistant</h1>
 
               <p className="muted">
-                Document-aware RAG chat.
+                Ask questions about your
+                uploaded documents using
+                document-aware AI.
               </p>
 
               <div className="card chat">
@@ -277,9 +321,10 @@ export default function Assistant() {
                   {m.length === 0 && (
                     <div className="msg ai">
                       Hi! Ask me about your
-                      uploaded documents. I will
-                      retrieve relevant chunks
-                      before answering.
+                      uploaded documents.
+                      I will retrieve relevant
+                      information before
+                      answering.
                     </div>
                   )}
 
@@ -293,6 +338,7 @@ export default function Assistant() {
                       }
                       key={x.id || i}
                     >
+
                       {x.content}
 
                       {x.role === "assistant" && (
@@ -312,6 +358,7 @@ export default function Assistant() {
                           Copy
                         </button>
                       )}
+
                     </div>
                   ))}
 
@@ -350,6 +397,7 @@ export default function Assistant() {
                 </div>
 
               </div>
+
             </div>
 
           </div>
