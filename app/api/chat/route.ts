@@ -37,26 +37,58 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: chunks, error: chunksError } = await sb
-      .from("document_chunks")
-      .select("content,chunk_index,documents!inner(file_name)")
+    // Get uploaded documents directly.
+    // No OpenAI embeddings required.
+    const { data: documents, error: docError } = await sb
+      .from("documents")
+      .select("id,file_name,extracted_text")
       .eq("user_id", user.id)
-      .limit(100);
+      .not("extracted_text", "is", null);
 
-    if (chunksError) {
-      console.error("Chunk retrieval error:", chunksError);
-
+    if (docError) {
       return NextResponse.json(
-        { error: chunksError.message },
+        { error: docError.message },
         { status: 500 }
       );
     }
 
+    if (!documents || documents.length === 0) {
+      return NextResponse.json({
+        answer:
+          "I couldn't find any uploaded documents. Please upload a document first.",
+        sources: []
+      });
+    }
+
     const stopWords = new Set([
-      "the","is","are","was","were","what","who","when",
-      "where","why","how","a","an","and","or","of","to",
-      "in","on","for","with","this","that","it","from",
-      "can","do","does"
+      "the",
+      "is",
+      "are",
+      "was",
+      "were",
+      "what",
+      "who",
+      "when",
+      "where",
+      "why",
+      "how",
+      "a",
+      "an",
+      "and",
+      "or",
+      "of",
+      "to",
+      "in",
+      "on",
+      "for",
+      "with",
+      "this",
+      "that",
+      "it",
+      "from",
+      "can",
+      "do",
+      "does"
     ]);
 
     const words = question
@@ -65,102 +97,135 @@ export async function POST(req: Request) {
       .split(/\s+/)
       .filter(
         (word: string) =>
-          word.length > 2 && !stopWords.has(word)
+          word.length > 2 &&
+          !stopWords.has(word)
       );
 
-    const rankedChunks = (chunks || [])
-      .map((chunk: any) => {
-        const content = String(
-          chunk.content || ""
-        ).toLowerCase();
+    // Create small chunks directly from extracted text.
+    const candidates: {
+      file_name: string;
+      content: string;
+      score: number;
+    }[] = [];
+
+    for (const doc of documents) {
+      const text = String(
+        doc.extracted_text || ""
+      );
+
+      const chunkSize = 5000;
+
+      for (
+        let i = 0;
+        i < text.length;
+        i += chunkSize
+      ) {
+        const content = text.slice(
+          i,
+          i + chunkSize
+        );
+
+        const lower =
+          content.toLowerCase();
 
         let score = 0;
 
         for (const word of words) {
-          if (content.includes(word)) {
+          if (lower.includes(word)) {
             score++;
           }
         }
 
-        return {
-          content: chunk.content,
-          file_name:
-            chunk.documents?.file_name ||
-            "Uploaded document",
-          chunk_index: chunk.chunk_index,
+        candidates.push({
+          file_name: doc.file_name,
+          content,
           score
-        };
-      })
-      .sort(
-        (a: any, b: any) =>
-          b.score - a.score
-      )
-      .slice(0, 10);
+        });
+      }
+    }
 
-    const context = rankedChunks
+    candidates.sort(
+      (a, b) => b.score - a.score
+    );
+
+    const selected =
+      candidates
+        .slice(0, 8);
+
+    const context = selected
       .map(
-        (chunk: any, index: number) =>
-          "[" +
-          String(index + 1) +
-          "] " +
-          chunk.file_name +
-          "\n" +
-          chunk.content
+        (chunk, index) =>
+          `[${index + 1}] ${chunk.file_name}\n${chunk.content}`
       )
       .join("\n\n");
 
     const finalContext =
       context ||
-      "No matching information was found in the uploaded documents.";
+      "No relevant information was found in the uploaded documents.";
 
-    const prompt =
-      "You are DocuMind AI, a document-aware assistant.\n\n" +
-      "Answer the user's question using ONLY the supplied document context.\n\n" +
-      "Rules:\n" +
-      "- Do not invent facts.\n" +
-      "- If the answer is not present, say you couldn't find it in the uploaded documents.\n" +
-      "- Give a clear and useful answer.\n" +
-      "- Use simple language.\n" +
-      "- Cite relevant source numbers like [1] or [2].\n\n" +
-      "User question:\n" +
-      question +
-      "\n\nDocument context:\n" +
-      finalContext;
+    const prompt = `
+You are DocuMind AI, a document-aware AI assistant.
+
+Answer the user's question using ONLY the uploaded document context below.
+
+Rules:
+- Do not invent facts.
+- Do not use outside knowledge.
+- If the answer is not present in the documents, say:
+  "I couldn't find this information in your uploaded documents."
+- Give a clear and useful answer.
+- Use simple language.
+- Cite the document context using [1], [2], etc. when appropriate.
+
+User question:
+${question}
+
+Uploaded document context:
+${finalContext}
+`;
 
     const response = await fetch(
       "https://router.huggingface.co/v1/chat/completions",
       {
         method: "POST",
+
         headers: {
           Authorization:
             "Bearer " + hfToken,
+
           "Content-Type":
             "application/json"
         },
+
         body: JSON.stringify({
           model: MODEL,
+
           messages: [
             {
               role: "system",
               content:
-                "You are DocuMind AI, a helpful document assistant."
+                "You are DocuMind AI. Answer only from uploaded documents."
             },
+
             {
               role: "user",
               content: prompt
             }
           ],
+
           temperature: 0.2,
+
           max_tokens: 1200
         })
       }
     );
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
     if (!response.ok) {
       console.error(
-        "Hugging Face Chat Error:",
+        "Hugging Face error:",
         data
       );
 
@@ -169,14 +234,19 @@ export async function POST(req: Request) {
           error:
             data?.error?.message ||
             data?.error ||
-            "Hugging Face AI request failed."
+            "Hugging Face request failed."
         },
-        { status: response.status }
+
+        {
+          status: response.status
+        }
       );
     }
 
     const answer =
-      data?.choices?.[0]?.message?.content?.trim();
+      data?.choices?.[0]
+        ?.message?.content
+        ?.trim();
 
     if (!answer) {
       return NextResponse.json(
@@ -184,16 +254,21 @@ export async function POST(req: Request) {
           error:
             "AI returned an empty response."
         },
-        { status: 500 }
+
+        {
+          status: 500
+        }
       );
     }
 
     return NextResponse.json({
       answer,
-      sources: rankedChunks.map(
-        (chunk: any) =>
-          chunk.file_name
-      )
+
+      sources:
+        selected.map(
+          (chunk) =>
+            chunk.file_name
+        )
     });
 
   } catch (error: any) {
@@ -208,7 +283,10 @@ export async function POST(req: Request) {
           error?.message ||
           "AI Assistant request failed."
       },
-      { status: 500 }
+
+      {
+        status: 500
+      }
     );
   }
 }
