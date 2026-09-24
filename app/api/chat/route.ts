@@ -16,136 +16,25 @@ type Attachment = {
   size: number;
 };
 
-function clean(s: string) {
-  return s
+function clean(text: string) {
+  return text
     .replace(/\u0000/g, " ")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
-async function extractText(
-  fileName: string,
-  buf: ArrayBuffer
-) {
-  const ext =
-    fileName
-      .toLowerCase()
-      .split(".")
-      .pop() || "";
-
-  if (
-    ext === "txt" ||
-    ext === "csv"
-  ) {
-    return clean(
-      new TextDecoder().decode(buf)
-    );
-  }
-
-  if (ext === "pdf") {
-    const mod: any =
-      await import("pdf-parse");
-
-    const parse =
-      mod.default || mod;
-
-    const result =
-      await parse(
-        Buffer.from(buf)
-      );
-
-    return clean(result.text);
-  }
-
-  if (ext === "docx") {
-    const result =
-      await mammoth.extractRawText({
-        buffer: Buffer.from(buf),
-      });
-
-    return clean(result.value);
-  }
-
-  if (ext === "xlsx") {
-    const wb = XLSX.read(
-      Buffer.from(buf),
-      { type: "buffer" }
-    );
-
-    return clean(
-      wb.SheetNames
-        .map(
-          (sheet) =>
-            "## " +
-            sheet +
-            "\n" +
-            XLSX.utils.sheet_to_csv(
-              wb.Sheets[sheet]
-            )
-        )
-        .join("\n\n")
-    );
-  }
-
-  if (ext === "pptx") {
-    const zip =
-      await JSZip.loadAsync(buf);
-
-    const out: string[] = [];
-
-    for (
-      const [path, entry] of Object.entries(
-        zip.files
-      )
-    ) {
-      if (
-        /^ppt\/slides\/slide\d+\.xml$/.test(
-          path
-        )
-      ) {
-        const xml =
-          await (entry as any).async(
-            "text"
-          );
-
-        out.push(
-          xml
-            .replace(/<a:t>/g, " ")
-            .replace(/<\/a:t>/g, " ")
-            .replace(/<[^>]+>/g, " ")
-        );
-      }
-    }
-
-    return clean(
-      out.join("\n")
-    );
-  }
-
-  throw new Error(
-    "Unsupported file type: " +
-      ext
-  );
-}
-
 function isImageType(type: string) {
-  return (
-    type === "image/png" ||
-    type === "image/jpeg" ||
-    type === "image/webp" ||
-    type === "image/gif"
-  );
+  return [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+  ].includes(type);
 }
 
-function isAllowedDocument(
-  fileName: string
-) {
-  const ext =
-    fileName
-      .toLowerCase()
-      .split(".")
-      .pop() || "";
+function isAllowedDocument(fileName: string) {
+  const ext = fileName.toLowerCase().split(".").pop() || "";
 
   return [
     "pdf",
@@ -157,42 +46,97 @@ function isAllowedDocument(
   ].includes(ext);
 }
 
+async function extractText(
+  fileName: string,
+  buffer: ArrayBuffer
+) {
+  const ext =
+    fileName.toLowerCase().split(".").pop() || "";
+
+  if (ext === "txt" || ext === "csv") {
+    return clean(new TextDecoder().decode(buffer));
+  }
+
+  if (ext === "pdf") {
+    const mod: any = await import("pdf-parse");
+    const parse = mod.default || mod;
+
+    const result = await parse(Buffer.from(buffer));
+
+    return clean(result.text || "");
+  }
+
+  if (ext === "docx") {
+    const result = await mammoth.extractRawText({
+      buffer: Buffer.from(buffer),
+    });
+
+    return clean(result.value || "");
+  }
+
+  if (ext === "xlsx") {
+    const workbook = XLSX.read(Buffer.from(buffer), {
+      type: "buffer",
+    });
+
+    const text = workbook.SheetNames.map((sheet) => {
+      return (
+        "## " +
+        sheet +
+        "\n" +
+        XLSX.utils.sheet_to_csv(workbook.Sheets[sheet])
+      );
+    }).join("\n\n");
+
+    return clean(text);
+  }
+
+  if (ext === "pptx") {
+    const zip = await JSZip.loadAsync(buffer);
+    const slides: string[] = [];
+
+    for (const [path, entry] of Object.entries(zip.files)) {
+      if (/^ppt\/slides\/slide\d+\.xml$/.test(path)) {
+        const xml = await (entry as any).async("text");
+
+        slides.push(
+          xml
+            .replace(/<a:t>/g, " ")
+            .replace(/<\/a:t>/g, " ")
+            .replace(/<[^>]+>/g, " ")
+        );
+      }
+    }
+
+    return clean(slides.join("\n"));
+  }
+
+  throw new Error("Unsupported file type.");
+}
+
 function makeDataUrl(
   type: string,
   buffer: ArrayBuffer
 ) {
-  const base64 =
-    Buffer.from(buffer).toString(
-      "base64"
-    );
+  const base64 = Buffer.from(buffer).toString("base64");
 
   return `data:${type};base64,${base64}`;
 }
 
-export async function POST(
-  req: Request
-) {
+export async function POST(req: Request) {
   const temporaryPaths: string[] = [];
 
   try {
     const body = await req.json();
 
-    const question =
-      String(
-        body?.question || ""
-      ).trim();
+    const question = String(body?.question || "").trim();
 
     const attachments: Attachment[] =
-      Array.isArray(
-        body?.attachments
-      )
+      Array.isArray(body?.attachments)
         ? body.attachments
         : [];
 
-    if (
-      !question &&
-      attachments.length === 0
-    ) {
+    if (!question && attachments.length === 0) {
       return NextResponse.json(
         {
           error:
@@ -202,54 +146,39 @@ export async function POST(
       );
     }
 
-    const sb =
-      await createServerSupabase();
+    const sb = await createServerSupabase();
 
     const {
       data: { user },
       error: authError,
     } = await sb.auth.getUser();
 
-    if (
-      authError ||
-      !user
-    ) {
+    if (authError || !user) {
       return NextResponse.json(
         {
-          error:
-            "Unauthorized. Please login again.",
+          error: "Unauthorized. Please login again.",
         },
         { status: 401 }
       );
     }
 
-    const hfToken =
-      process.env.HF_TOKEN;
+    const hfToken = process.env.HF_TOKEN;
 
     if (!hfToken) {
       return NextResponse.json(
         {
-          error:
-            "HF_TOKEN is not configured.",
+          error: "HF_TOKEN is not configured.",
         },
         { status: 500 }
       );
     }
 
-    /*
-     * SECURITY:
-     * Every attachment must belong to
-     * the currently authenticated user.
-     */
+    // Validate attachments
     for (const item of attachments) {
-      if (
-        !item?.path ||
-        !item?.name
-      ) {
+      if (!item?.path || !item?.name) {
         return NextResponse.json(
           {
-            error:
-              "Invalid attachment information.",
+            error: "Invalid attachment information.",
           },
           { status: 400 }
         );
@@ -262,25 +191,16 @@ export async function POST(
       ) {
         return NextResponse.json(
           {
-            error:
-              "Invalid attachment path.",
+            error: "Invalid attachment path.",
           },
           { status: 403 }
         );
       }
 
-      temporaryPaths.push(
-        item.path
-      );
-
-      if (
-        item.size >
-        15 * 1024 * 1024
-      ) {
+      if (item.size > 15 * 1024 * 1024) {
         return NextResponse.json(
           {
-            error:
-              `${item.name} is larger than 15 MB.`,
+            error: `${item.name} is larger than 15 MB.`,
           },
           { status: 400 }
         );
@@ -288,9 +208,7 @@ export async function POST(
 
       if (
         !isImageType(item.type) &&
-        !isAllowedDocument(
-          item.name
-        )
+        !isAllowedDocument(item.name)
       ) {
         return NextResponse.json(
           {
@@ -300,11 +218,11 @@ export async function POST(
           { status: 400 }
         );
       }
+
+      temporaryPaths.push(item.path);
     }
 
-    /*
-     * Read assistant attachments.
-     */
+    // Process new attachments
     const attachmentTexts: {
       name: string;
       content: string;
@@ -317,132 +235,112 @@ export async function POST(
     }[] = [];
 
     for (const item of attachments) {
-      const downloaded =
-        await sb.storage
-          .from("documents")
-          .download(item.path);
+      const downloaded = await sb.storage
+        .from("documents")
+        .download(item.path);
 
       if (
         downloaded.error ||
         !downloaded.data
       ) {
         throw new Error(
-          `Could not read attachment: ${item.name}`
+          `Could not read ${item.name}`
         );
       }
 
       const buffer =
         await downloaded.data.arrayBuffer();
 
-      if (
-        isImageType(item.type)
-      ) {
+      if (isImageType(item.type)) {
         images.push({
           name: item.name,
           type: item.type,
-          dataUrl:
-            makeDataUrl(
-              item.type,
-              buffer
-            ),
+          dataUrl: makeDataUrl(
+            item.type,
+            buffer
+          ),
         });
       } else {
-        const extracted =
-          await extractText(
-            item.name,
-            buffer
-          );
+        const text = await extractText(
+          item.name,
+          buffer
+        );
 
-        if (extracted) {
+        if (text) {
+          // Limit huge attachment text
           attachmentTexts.push({
             name: item.name,
-            content: extracted,
+            content: text.slice(0, 12000),
           });
         }
       }
     }
 
-    /*
-     * Get user's saved documents.
-     */
+    // Get user's existing documents
     const {
       data: documents,
       error: docError,
     } = await sb
       .from("documents")
       .select(
-        "id,file_name,extracted_text"
+        "file_name,extracted_text"
       )
-      .eq(
-        "user_id",
-        user.id
-      )
-      .not(
-        "extracted_text",
-        "is",
-        null
-      );
+      .eq("user_id", user.id)
+      .not("extracted_text", "is", null);
 
     if (docError) {
       return NextResponse.json(
         {
-          error:
-            docError.message,
+          error: docError.message,
         },
         { status: 500 }
       );
     }
 
-    /*
-     * Existing document RAG-style
-     * keyword retrieval.
-     */
-    const stopWords =
-      new Set([
-        "the",
-        "is",
-        "are",
-        "was",
-        "were",
-        "what",
-        "who",
-        "when",
-        "where",
-        "why",
-        "how",
-        "a",
-        "an",
-        "and",
-        "or",
-        "of",
-        "to",
-        "in",
-        "on",
-        "for",
-        "with",
-        "this",
-        "that",
-        "it",
-        "from",
-        "can",
-        "do",
-        "does",
-        "please",
-      ]);
+    // Fast keyword search
+    const stopWords = new Set([
+      "the",
+      "is",
+      "are",
+      "was",
+      "were",
+      "what",
+      "who",
+      "when",
+      "where",
+      "why",
+      "how",
+      "a",
+      "an",
+      "and",
+      "or",
+      "of",
+      "to",
+      "in",
+      "on",
+      "for",
+      "with",
+      "this",
+      "that",
+      "it",
+      "from",
+      "can",
+      "do",
+      "does",
+      "please",
+      "tell",
+      "me",
+    ]);
 
-    const words =
-      question
-        .toLowerCase()
-        .replace(
-          /[^a-z0-9\s]/g,
-          " "
-        )
-        .split(/\s+/)
-        .filter(
-          (word: string) =>
-            word.length > 2 &&
-            !stopWords.has(word)
-        );
+    const words = question
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(
+        (word: string) =>
+          word.length > 2 &&
+          !stopWords.has(word)
+      );
 
     const candidates: {
       file_name: string;
@@ -450,27 +348,23 @@ export async function POST(
       score: number;
     }[] = [];
 
-    for (const doc of
-      documents || []) {
-      const text =
-        String(
-          doc.extracted_text ||
-            ""
-        );
+    for (const doc of documents || []) {
+      const text = String(
+        doc.extracted_text || ""
+      );
 
-      const chunkSize =
-        5000;
+      // Smaller chunks = less context sent to AI
+      const chunkSize = 3500;
 
       for (
         let i = 0;
         i < text.length;
         i += chunkSize
       ) {
-        const content =
-          text.slice(
-            i,
-            i + chunkSize
-          );
+        const content = text.slice(
+          i,
+          i + chunkSize
+        );
 
         const lower =
           content.toLowerCase();
@@ -478,16 +372,13 @@ export async function POST(
         let score = 0;
 
         for (const word of words) {
-          if (
-            lower.includes(word)
-          ) {
+          if (lower.includes(word)) {
             score++;
           }
         }
 
         candidates.push({
-          file_name:
-            doc.file_name,
+          file_name: doc.file_name,
           content,
           score,
         });
@@ -495,20 +386,19 @@ export async function POST(
     }
 
     candidates.sort(
-      (a, b) =>
-        b.score - a.score
+      (a, b) => b.score - a.score
     );
 
+    // Only send top 4 chunks
     const selected =
-      candidates.slice(0, 8);
+      candidates.slice(0, 4);
 
-    const savedContext =
-      selected
-        .map(
-          (chunk, index) =>
-            `[${index + 1}] ${chunk.file_name}\n${chunk.content}`
-        )
-        .join("\n\n");
+    const savedContext = selected
+      .map(
+        (chunk, index) =>
+          `[${index + 1}] ${chunk.file_name}\n${chunk.content}`
+      )
+      .join("\n\n");
 
     const attachmentContext =
       attachmentTexts
@@ -518,88 +408,63 @@ export async function POST(
         )
         .join("\n\n");
 
-    const combinedContext =
-      [
-        savedContext
-          ? "UPLOADED DOCUMENTS:\n" +
-            savedContext
-          : "",
-        attachmentContext
-          ? "NEW ATTACHED FILES:\n" +
-            attachmentContext
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
+    const combinedContext = [
+      savedContext
+        ? `UPLOADED DOCUMENTS:\n${savedContext}`
+        : "",
+      attachmentContext
+        ? `NEW ATTACHED FILES:\n${attachmentContext}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
-    /*
-     * If an image is attached,
-     * use the multimodal model.
-     */
-    const hasImages =
-      images.length > 0;
+    const hasImages = images.length > 0;
 
-    const model =
-      hasImages
-        ? VISION_MODEL
-        : TEXT_MODEL;
+    const model = hasImages
+      ? VISION_MODEL
+      : TEXT_MODEL;
 
-    const textPrompt = `
-You are DocAI, a secure document-aware AI assistant.
+    const prompt = `
+You are DocAI, a fast document AI assistant.
 
 User question:
-${question || "Please analyze the attached content."}
+${question || "Analyze the attached content."}
 
-Use the provided document context and attached content.
+${
+  combinedContext
+    ? `
+Document context:
+${combinedContext}
+`
+    : ""
+}
 
 Rules:
-- Answer clearly and helpfully.
-- Do not invent information.
-- For document questions, prefer the supplied document content.
-- If the requested information is not present, clearly say that you could not find it.
-- If an image is attached, analyze the visible content of the image.
-- You may describe text, tables, objects, diagrams, screenshots, charts, and other visible information.
-- Use simple language.
-${combinedContext
-  ? `
-
-DOCUMENT CONTEXT:
-${combinedContext}`
-  : ""}
+- Answer clearly and directly.
+- Use supplied document information.
+- Do not invent document facts.
+- If information is unavailable, say so.
+- Keep the answer concise unless detailed explanation is requested.
 `;
 
-    let userContent:
-      | string
-      | {
-          type: string;
-          text?: string;
-          image_url?: {
-            url: string;
-          };
-        }[];
+    let userContent: any = prompt;
 
     if (hasImages) {
-      const contentParts: {
-        type: string;
-        text?: string;
-        image_url?: {
-          url: string;
-        };
-      }[] = [];
-
-      contentParts.push({
-        type: "text",
-        text: textPrompt,
-      });
+      const content: any[] = [
+        {
+          type: "text",
+          text: prompt,
+        },
+      ];
 
       for (const image of images) {
-        contentParts.push({
+        content.push({
           type: "text",
-          text:
-            `Attached image: ${image.name}`,
+          text: `Attached image: ${image.name}`,
         });
 
-        contentParts.push({
+        content.push({
           type: "image_url",
           image_url: {
             url: image.dataUrl,
@@ -607,110 +472,123 @@ ${combinedContext}`
         });
       }
 
-      userContent =
-        contentParts;
-    } else {
-      userContent =
-        textPrompt;
+      userContent = content;
     }
 
-    const response =
-      await fetch(
-        "https://router.huggingface.co/v1/chat/completions",
-        {
-          method: "POST",
-
-          headers: {
-            Authorization:
-              "Bearer " +
-              hfToken,
-            "Content-Type":
-              "application/json",
-          },
-
-          body: JSON.stringify({
-            model,
-
-            messages: [
-              {
-                role: "system",
-                content:
-                  hasImages
-                    ? "You are DocAI, a multimodal document assistant. Analyze images and supplied document context carefully."
-                    : "You are DocAI. Answer using supplied document context and never invent document facts.",
-              },
-
-              {
-                role: "user",
-                content:
-                  userContent,
-              },
-            ],
-
-            temperature: 0.2,
-
-            max_tokens:
-              hasImages
-                ? 1500
-                : 1200,
-          }),
-        }
-      );
-
-    const data =
-      await response.json();
+    // Streaming Hugging Face response
+    const response = await fetch(
+      "https://router.huggingface.co/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            `Bearer ${hfToken}`,
+          "Content-Type":
+            "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "system",
+              content: hasImages
+                ? "You are DocAI, a fast multimodal document assistant."
+                : "You are DocAI, a fast document assistant.",
+            },
+            {
+              role: "user",
+              content: userContent,
+            },
+          ],
+          temperature: 0.2,
+          max_tokens: hasImages
+            ? 900
+            : 800,
+          stream: true,
+        }),
+      }
+    );
 
     if (!response.ok) {
-      console.error(
-        "Hugging Face error:",
-        data
-      );
+      const errorData =
+        await response.json();
 
       return NextResponse.json(
         {
           error:
-            data?.error?.message ||
-            data?.error ||
+            errorData?.error?.message ||
+            errorData?.error ||
             "Hugging Face request failed.",
         },
         {
-          status:
-            response.status,
+          status: response.status,
         }
       );
     }
 
-    const answer =
-      data?.choices?.[0]
-        ?.message
-        ?.content
-        ?.trim();
-
-    if (!answer) {
+    if (!response.body) {
       return NextResponse.json(
         {
           error:
-            "AI returned an empty response.",
+            "AI response stream unavailable.",
         },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({
-      answer,
+    // Forward AI stream directly to browser
+    const stream =
+      new ReadableStream({
+        async start(controller) {
+          const reader =
+            response.body!.getReader();
 
-      sources: selected.map(
-        (chunk) =>
-          chunk.file_name
-      ),
+          const decoder =
+            new TextDecoder();
 
-      attachments:
-        attachments.map(
-          (item) =>
-            item.name
-        ),
+          const encoder =
+            new TextEncoder();
 
-      model,
+          try {
+            while (true) {
+              const {
+                value,
+                done,
+              } = await reader.read();
+
+              if (done) break;
+
+              const text =
+                decoder.decode(
+                  value,
+                  { stream: true }
+                );
+
+              controller.enqueue(
+                encoder.encode(text)
+              );
+            }
+          } catch (error) {
+            console.error(
+              "Stream error:",
+              error
+            );
+          } finally {
+            controller.close();
+          }
+        },
+      });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type":
+          "text/event-stream; charset=utf-8",
+        "Cache-Control":
+          "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering":
+          "no",
+      },
     });
   } catch (error: any) {
     console.error(
@@ -727,14 +605,8 @@ ${combinedContext}`
       { status: 500 }
     );
   } finally {
-    /*
-     * Remove temporary assistant
-     * attachments from private storage.
-     */
     try {
-      if (
-        temporaryPaths.length > 0
-      ) {
+      if (temporaryPaths.length > 0) {
         const sb =
           await createServerSupabase();
 
@@ -744,10 +616,10 @@ ${combinedContext}`
             temporaryPaths
           );
       }
-    } catch (cleanupError) {
+    } catch (error) {
       console.error(
-        "Attachment cleanup error:",
-        cleanupError
+        "Cleanup error:",
+        error
       );
     }
   }
