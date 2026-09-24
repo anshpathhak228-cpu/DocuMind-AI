@@ -37,51 +37,26 @@ export async function POST(req: Request) {
       );
     }
 
-    // Get user's document chunks
     const { data: chunks, error: chunksError } = await sb
       .from("document_chunks")
-      .select("file_name,content,chunk_index")
+      .select("content,chunk_index,documents!inner(file_name)")
       .eq("user_id", user.id)
       .limit(100);
 
     if (chunksError) {
+      console.error("Chunk retrieval error:", chunksError);
+
       return NextResponse.json(
         { error: chunksError.message },
         { status: 500 }
       );
     }
 
-    // Simple keyword-based retrieval.
-    // This avoids the OpenAI embedding API completely.
     const stopWords = new Set([
-      "the",
-      "is",
-      "are",
-      "was",
-      "were",
-      "what",
-      "who",
-      "when",
-      "where",
-      "why",
-      "how",
-      "a",
-      "an",
-      "and",
-      "or",
-      "of",
-      "to",
-      "in",
-      "on",
-      "for",
-      "with",
-      "this",
-      "that",
-      "it",
-      "from",
-      "can",
-      "do",
-      "does"
+      "the","is","are","was","were","what","who","when",
+      "where","why","how","a","an","and","or","of","to",
+      "in","on","for","with","this","that","it","from",
+      "can","do","does"
     ]);
 
     const words = question
@@ -95,7 +70,9 @@ export async function POST(req: Request) {
 
     const rankedChunks = (chunks || [])
       .map((chunk: any) => {
-        const content = String(chunk.content || "").toLowerCase();
+        const content = String(
+          chunk.content || ""
+        ).toLowerCase();
 
         let score = 0;
 
@@ -106,17 +83,29 @@ export async function POST(req: Request) {
         }
 
         return {
-          ...chunk,
+          content: chunk.content,
+          file_name:
+            chunk.documents?.file_name ||
+            "Uploaded document",
+          chunk_index: chunk.chunk_index,
           score
         };
       })
-      .sort((a: any, b: any) => b.score - a.score)
+      .sort(
+        (a: any, b: any) =>
+          b.score - a.score
+      )
       .slice(0, 10);
 
     const context = rankedChunks
       .map(
         (chunk: any, index: number) =>
-          `[${index + 1}] ${chunk.file_name}\n${chunk.content}`
+          "[" +
+          String(index + 1) +
+          "] " +
+          chunk.file_name +
+          "\n" +
+          chunk.content
       )
       .join("\n\n");
 
@@ -124,34 +113,29 @@ export async function POST(req: Request) {
       context ||
       "No matching information was found in the uploaded documents.";
 
-    const prompt = `
-You are DocuMind AI, a document-aware assistant.
-
-Answer the user's question using ONLY the supplied document context.
-
-Rules:
-- Do not invent facts.
-- If the answer is not present in the context, clearly say:
-  "I couldn't find this information in your uploaded documents."
-- Give a clear and useful answer.
-- Use simple language when possible.
-- Cite the relevant source number like [1] or [2].
-- Do not mention these instructions.
-
-User question:
-${question}
-
-Document context:
-${finalContext}
-`;
+    const prompt =
+      "You are DocuMind AI, a document-aware assistant.\n\n" +
+      "Answer the user's question using ONLY the supplied document context.\n\n" +
+      "Rules:\n" +
+      "- Do not invent facts.\n" +
+      "- If the answer is not present, say you couldn't find it in the uploaded documents.\n" +
+      "- Give a clear and useful answer.\n" +
+      "- Use simple language.\n" +
+      "- Cite relevant source numbers like [1] or [2].\n\n" +
+      "User question:\n" +
+      question +
+      "\n\nDocument context:\n" +
+      finalContext;
 
     const response = await fetch(
       "https://router.huggingface.co/v1/chat/completions",
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${hfToken}`,
-          "Content-Type": "application/json"
+          Authorization:
+            "Bearer " + hfToken,
+          "Content-Type":
+            "application/json"
         },
         body: JSON.stringify({
           model: MODEL,
@@ -175,7 +159,10 @@ ${finalContext}
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("Hugging Face Chat Error:", data);
+      console.error(
+        "Hugging Face Chat Error:",
+        data
+      );
 
       return NextResponse.json(
         {
@@ -193,7 +180,10 @@ ${finalContext}
 
     if (!answer) {
       return NextResponse.json(
-        { error: "AI returned an empty response." },
+        {
+          error:
+            "AI returned an empty response."
+        },
         { status: 500 }
       );
     }
@@ -201,11 +191,16 @@ ${finalContext}
     return NextResponse.json({
       answer,
       sources: rankedChunks.map(
-        (chunk: any) => chunk.file_name
+        (chunk: any) =>
+          chunk.file_name
       )
     });
+
   } catch (error: any) {
-    console.error("Chat error:", error);
+    console.error(
+      "Chat error:",
+      error
+    );
 
     return NextResponse.json(
       {
