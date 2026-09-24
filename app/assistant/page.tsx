@@ -263,31 +263,88 @@ export default function Assistant() {
         "user",
         displayText
       );
+       const sb = createClient();
 
-      const r = await fetch(
-        "/api/chat",
-        {
-          method: "POST",
-          headers: {
-            "content-type":
-              "application/json",
-          },
-          body: JSON.stringify({
-            question: text,
-            attachments:
-              attachments.map(
-                (item) => ({
-                  name:
-                    item.file.name,
-                  type:
-                    item.file.type,
-                  size:
-                    item.file.size,
-                })
-              ),
-          }),
-        }
-      );
+const {
+  data: { user },
+  error: userError,
+} = await sb.auth.getUser();
+
+if (userError || !user) {
+  throw new Error("Please login again.");
+}
+
+const totalSize = attachments.reduce(
+  (sum, item) => sum + item.file.size,
+  0
+);
+
+if (totalSize > 25 * 1024 * 1024) {
+  throw new Error(
+    "Total attachment size must be 25 MB or less."
+  );
+}
+
+const uploadedAttachments: {
+  path: string;
+  name: string;
+  type: string;
+  size: number;
+}[] = [];
+
+for (const item of attachments) {
+  if (item.file.size > 15 * 1024 * 1024) {
+    throw new Error(
+      `${item.file.name} is larger than 15 MB.`
+    );
+  }
+
+  const safeName =
+    item.file.name
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .slice(0, 120);
+
+  const path =
+    `${user.id}/assistant/${crypto.randomUUID()}-${safeName}`;
+
+  const { error: uploadError } =
+    await sb.storage
+      .from("documents")
+      .upload(path, item.file, {
+        contentType:
+          item.file.type ||
+          "application/octet-stream",
+        upsert: false,
+      });
+
+  if (uploadError) {
+    throw new Error(
+      `Could not upload ${item.file.name}: ${uploadError.message}`
+    );
+  }
+
+  uploadedAttachments.push({
+    path,
+    name: item.file.name,
+    type: item.file.type,
+    size: item.file.size,
+  });
+}
+
+const r = await fetch(
+  "/api/chat",
+  {
+    method: "POST",
+    headers: {
+      "content-type":
+        "application/json",
+    },
+    body: JSON.stringify({
+      question: text,
+      attachments: uploadedAttachments,
+    }),
+  }
+);
 
       const j = await r.json();
 
@@ -789,7 +846,7 @@ export default function Assistant() {
                     }
                     type="file"
                     multiple
-                    accept=".pdf,.doc,.docx,.txt,.csv,.xlsx,.ppt,.pptx"
+                    accept=".pdf,.docx,.txt,.csv,.xlsx,.pptx"
                     style={{
                       display:
                         "none",
