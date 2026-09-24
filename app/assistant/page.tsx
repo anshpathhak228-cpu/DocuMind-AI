@@ -105,9 +105,7 @@ export default function Assistant() {
       let activeSession = sessionId;
 
       if (!activeSession) {
-        activeSession = await createSession(
-          text.slice(0, 40)
-        );
+        activeSession = await createSession(text.slice(0, 40));
       }
 
       const userMessage: Msg = {
@@ -117,11 +115,7 @@ export default function Assistant() {
 
       setM((old) => [...old, userMessage]);
 
-      await saveMessage(
-        activeSession,
-        "user",
-        text
-      );
+      await saveMessage(activeSession, "user", text);
 
       const r = await fetch("/api/chat", {
         method: "POST",
@@ -184,7 +178,7 @@ export default function Assistant() {
             className="brand"
             href="/dashboard"
           >
-            Docu<span>Mind</span> AI
+            Doc<span>AI</span>
           </Link>
 
           <div className="links">
@@ -203,8 +197,7 @@ export default function Assistant() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns:
-                "240px 1fr",
+              gridTemplateColumns: "240px 1fr",
               gap: "20px",
             }}
           >
@@ -246,9 +239,7 @@ export default function Assistant() {
               {sessions.map((s) => (
                 <button
                   key={s.id}
-                  onClick={() =>
-                    loadSession(s.id)
-                  }
+                  onClick={() => loadSession(s.id)}
                   style={{
                     display: "block",
                     width: "100%",
@@ -341,9 +332,7 @@ export default function Assistant() {
                       setQ(e.target.value)
                     }
                     onKeyDown={(e) => {
-                      if (
-                        e.key === "Enter"
-                      ) {
+                      if (e.key === "Enter") {
                         send();
                       }
                     }}
@@ -355,9 +344,7 @@ export default function Assistant() {
                     onClick={send}
                     disabled={busy}
                   >
-                    {busy
-                      ? "..."
-                      : "Send"}
+                    {busy ? "..." : "Send"}
                   </button>
 
                 </div>
