@@ -1,6 +1,57 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase-server";
 
+const MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+];
+
+async function generateWithGemini(
+  model: string,
+  prompt: string,
+  apiKey: string
+) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: prompt }],
+          },
+        ],
+      }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      `${model}: ${
+        data?.error?.message || "Gemini API request failed."
+      }`
+    );
+  }
+
+  const summary = data?.candidates?.[0]?.content?.parts
+    ?.map((part: { text?: string }) => part.text || "")
+    .join("")
+    .trim();
+
+  if (!summary) {
+    throw new Error(`${model}: Empty response from Gemini.`);
+  }
+
+  return summary;
+}
+
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -47,21 +98,24 @@ export async function POST(
       );
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
       return NextResponse.json(
-        { error: "GEMINI_API_KEY is not configured." },
+        { error: "GEMINI_API_KEY is not configured in Vercel." },
         { status: 500 }
       );
     }
-
-    const model = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 
     const prompt = `
 Summarize the following document faithfully.
 
 Use these headings:
+
 ## Overview
+
 ## Key Points
+
 ## Action Items
 
 Rules:
@@ -69,6 +123,7 @@ Rules:
 - Use only information present in the document.
 - Keep the summary clear and useful.
 - Preserve important facts, names, dates and numbers.
+- If there are no action items, write "No specific action items found."
 
 File name:
 ${doc.file_name}
@@ -77,52 +132,43 @@ Document:
 ${(doc.extracted_text || "").slice(0, 60000)}
 `;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": process.env.GEMINI_API_KEY,
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-        }),
+    let summary = "";
+    const errors: string[] = [];
+
+    // Try multiple Gemini models automatically
+    for (const model of MODELS) {
+      try {
+        summary = await generateWithGemini(
+          model,
+          prompt,
+          apiKey
+        );
+
+        console.log(`Summary generated using ${model}`);
+        break;
+      } catch (error: any) {
+        console.error(
+          `Gemini model ${model} failed:`,
+          error?.message
+        );
+
+        errors.push(error?.message || `${model} failed`);
+
+        // Small delay before next model
+        await new Promise((resolve) =>
+          setTimeout(resolve, 800)
+        );
       }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error("Gemini API error:", data);
-
-      return NextResponse.json(
-        {
-          error:
-            data?.error?.message ||
-            "Gemini API request failed.",
-        },
-        { status: 500 }
-      );
     }
-
-    const summary = data?.candidates?.[0]?.content?.parts
-      ?.map((part: { text?: string }) => part.text || "")
-      .join("")
-      .trim();
 
     if (!summary) {
       return NextResponse.json(
-        { error: "Gemini returned an empty summary." },
-        { status: 500 }
+        {
+          error:
+            "All Gemini models are temporarily unavailable.",
+          details: errors,
+        },
+        { status: 503 }
       );
     }
 
@@ -143,7 +189,10 @@ ${(doc.extracted_text || "").slice(0, 60000)}
       new URL(`/documents/${id}`, req.url)
     );
   } catch (error: any) {
-    console.error("Summary generation failed:", error);
+    console.error(
+      "Summary generation failed:",
+      error
+    );
 
     return NextResponse.json(
       {
