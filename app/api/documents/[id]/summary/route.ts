@@ -54,7 +54,7 @@ export async function POST(
       );
     }
 
-    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    const model = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 
     const prompt = `
 Summarize the following document faithfully.
