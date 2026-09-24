@@ -11,11 +11,18 @@ export default function Upload() {
   const [file, setFile] = useState<File | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  async function goDashboard() {
+    router.push("/dashboard");
+    router.refresh();
+  }
 
   async function up() {
     if (!file || busy) return;
 
     setBusy(true);
+    setSuccess(false);
     setMsg("Uploading securely...");
 
     try {
@@ -84,25 +91,28 @@ export default function Upload() {
           .remove([path]);
 
         throw new Error(
-          result.error || "Document processing failed."
+          result.error ||
+            "Document processing failed."
         );
       }
 
+      setSuccess(true);
       setMsg(
-        "Upload complete! Opening dashboard..."
+        "Upload complete! Your document is ready."
       );
 
       setFile(null);
 
       setTimeout(() => {
-        router.push("/dashboard");
-        router.refresh();
-      }, 700);
+        goDashboard();
+      }, 2000);
     } catch (error) {
+      setSuccess(false);
+
       setMsg(
         error instanceof Error
           ? error.message
-          : "Upload failed."
+          : "Upload failed. Please try again."
       );
     } finally {
       setBusy(false);
@@ -123,7 +133,10 @@ export default function Upload() {
           </Link>
 
           <div className="links">
-            <Link href="/">Home</Link>
+
+            <Link href="/">
+              Home
+            </Link>
 
             <Link href="/dashboard">
               Dashboard
@@ -136,13 +149,16 @@ export default function Upload() {
             <Link href="/assistant">
               AI Assistant
             </Link>
+
           </div>
 
         </nav>
 
         <section className="main">
 
-          <h1>Upload & Index</h1>
+          <h1>
+            Upload & Index
+          </h1>
 
           <p className="muted">
             Upload your documents securely.
@@ -159,11 +175,14 @@ export default function Upload() {
             <input
               type="file"
               accept=".pdf,.docx,.txt,.csv,.xlsx,.pptx"
-              onChange={(e) =>
+              disabled={busy}
+              onChange={(e) => {
                 setFile(
                   e.target.files?.[0] ?? null
-                )
-              }
+                );
+                setMsg("");
+                setSuccess(false);
+              }}
             />
 
             <p>
@@ -182,9 +201,50 @@ export default function Upload() {
             </button>
 
             {msg && (
-              <p className="muted">
-                {msg}
-              </p>
+              <div
+                className="card"
+                style={{
+                  marginTop: "20px",
+                  textAlign: "center",
+                  padding: "18px",
+                }}
+              >
+
+                <p
+                  className={
+                    success
+                      ? ""
+                      : "muted"
+                  }
+                >
+                  {success
+                    ? "✅ " + msg
+                    : msg}
+                </p>
+
+                {success && (
+                  <>
+                    <button
+                      className="btn primary"
+                      onClick={goDashboard}
+                    >
+                      Go to Dashboard →
+                    </button>
+
+                    <p
+                      className="muted"
+                      style={{
+                        fontSize: "12px",
+                        marginTop: "10px",
+                      }}
+                    >
+                      Dashboard will open
+                      automatically in a moment.
+                    </p>
+                  </>
+                )}
+
+              </div>
             )}
 
           </div>
